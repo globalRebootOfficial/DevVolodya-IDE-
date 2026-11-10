@@ -1,6 +1,13 @@
 package com.devvolodya.ide
 
 import android.os.Bundle
+import android.content.Context
+import android.content.ClipboardManager
+import android.content.ClipData
+import android.widget.Toast
+import java.io.FileOutputStream
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
@@ -24,6 +31,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -80,6 +90,10 @@ private fun DevVolodyaApp(repository: WorkspaceRepository) {
     var newFilePath by remember { mutableStateOf("src/Main.kt") }
     var showCreateFileDialog by remember { mutableStateOf(false) }
     var statusMessage by remember { mutableStateOf<String?>(null) }
+    var fileClipboard by remember { mutableStateOf<File?>(null) }
+    var cutClipboard by remember { mutableStateOf(false) }
+    var showDeleteDialog by remember { mutableStateOf(false) }
+    var rootStatus by remember { mutableStateOf("Not checked") }
 
     fun refreshProjects() {
         projects = repository.listProjects()
@@ -132,6 +146,8 @@ private fun DevVolodyaApp(repository: WorkspaceRepository) {
         }
     }
 
+    fun refreshProjectFiles() { selectedProject?.let { projectFiles = repository.listProjectFiles(it) } }
+
     fun createProjectFile() {
         val project = selectedProject ?: return
         val result = runCatching { repository.createFile(project, newFilePath) }
@@ -144,6 +160,10 @@ private fun DevVolodyaApp(repository: WorkspaceRepository) {
         }.onFailure { error ->
             statusMessage = error.message ?: "File creation failed"
         }
+    }
+
+    if (showDeleteDialog && selectedFile != null) {
+        AlertDialog(onDismissRequest = { showDeleteDialog = false }, title = { Text("Delete file?") }, text = { Text("This permanently deletes ${selectedFile?.name}.") }, confirmButton = { TextButton(onClick = { val target = selectedFile; val project = selectedProject; if (target != null && project != null) runCatching { repository.deleteEntry(project, target) }.onSuccess { selectedFile = null; editorContent = ""; editorDirty = false; refreshProjectFiles(); statusMessage = "File deleted" }.onFailure { statusMessage = it.message }; showDeleteDialog = false }) { Text("Delete") } }, dismissButton = { TextButton(onClick = { showDeleteDialog = false }) { Text("Cancel") } })
     }
 
     if (showCreateFileDialog && selectedProject != null) {
@@ -478,7 +498,7 @@ private fun GitPage(project: File?) {
 }
 
 @Composable
-private fun BuildPage() {
+private fun BuildPage(project: File?, onExportZip: () -> Unit, onExportShell: () -> Unit, onBuildApk: () -> Unit) {
     Text("Build Center", style = MaterialTheme.typography.titleMedium)
     Spacer(Modifier.height(12.dp))
     listOf(
@@ -498,7 +518,7 @@ private fun BuildPage() {
 }
 
 @Composable
-private fun SettingsPage() {
+private fun SettingsPage(rootStatus: String, onCheckRoot: () -> Unit) {
     Text("Settings", style = MaterialTheme.typography.titleMedium)
     Spacer(Modifier.height(8.dp))
     InfoRow("Package", "com.devvolodya.ide")
@@ -506,7 +526,7 @@ private fun SettingsPage() {
     InfoRow("Workspace", "App-private storage; SAF import is a later milestone")
     InfoRow("Native ABI", "ARM64 (arm64-v8a) for future native toolchains")
     InfoRow("Dev Hub", "Local + remote server planned")
-    InfoRow("Root", "No root command runs without explicit user confirmation")
+    InfoRow("Root status", rootStatus)\n    OutlinedButton(onClick = onCheckRoot) { Text("Check KernelSU / Magisk root") }\n    Spacer(Modifier.height(12.dp))\n    Text("COMPLETE USER GUIDE", color = Accent, style = MaterialTheme.typography.titleMedium)\n    InfoRow("1. Projects", "Open Projects, enter a project name and tap Create. Open a project to see its files.")\n    InfoRow("2. Files", "Use + / New file to create a file. Select a file in the left list. Copy file, Cut, Paste file and Delete act on the selected file. Delete asks for confirmation.")\n    InfoRow("3. Code editor", "Edit text in the editor. Save commits changes to the local workspace. Copy code, Cut code and Paste code work with the whole editor buffer and Android clipboard.")\n    InfoRow("4. Build Center", "Choose Build APK when an Android SDK build runner is configured. ZIP and SH export are available for project packaging. Other targets need their own compiler/toolchain.")\n    InfoRow("5. Git", "Git controls are planned; repository status and commits are not active in this build.")\n    InfoRow("6. Root", "Device must already be rooted. Tap Check KernelSU / Magisk root and approve the superuser prompt. Root is not enabled automatically and no command runs silently.")\n    InfoRow("7. Backups", "Export ZIP before making major changes. App data may be removed if DevVolodya IDE is uninstalled.")\n    InfoRow("8. Supported targets", "APK/AAB: Android Gradle + SDK. EXE: Windows toolchain. ZIP: archive exporter. SH: shell script. Python/JS/JVM/native targets require matching runtimes and compilers.")
 }
 
 @Composable
@@ -522,3 +542,4 @@ private fun InfoRow(title: String, detail: String) {
         }
     }
 }
+\n\nprivate fun exportZip(project: File?, filesDir: File): File? {\n    if (project == null || !project.isDirectory) return null\n    return runCatching { val outDir = File(filesDir, "exports").apply { mkdirs() }; val out = File(outDir, "${project.name}.zip"); ZipOutputStream(FileOutputStream(out)).use { zip -> project.walkTopDown().filter { it.isFile }.forEach { file -> val entry = ZipEntry(project.name + "/" + file.relativeTo(project).invariantSeparatorsPath); zip.putNextEntry(entry); file.inputStream().use { it.copyTo(zip) }; zip.closeEntry() } }; out }.getOrNull()\n}\n\nprivate fun exportShell(project: File?): File? {\n    if (project == null || !project.isDirectory) return null\n    return runCatching { val out = File(project, "build-project.sh"); out.writeText("#!/system/bin/sh\\nset -eu\\nROOT=\\\"\\$(CDPATH= cd -- \\\"\\$(dirname -- \\\"\\$0\\\")\\\" && pwd)\\\"\\necho \\\"Project: ${project.name}\\\"\\necho \\\"This is an export helper. Add the required compiler/build commands for your project.\\\"\\n", Charsets.UTF_8); out.setExecutable(true); out }.getOrNull()\n}\n
