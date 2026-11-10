@@ -12,5 +12,5 @@ dependencyResolutionManagement {
         mavenCentral()
     }
 }
-rootProject.name = "DevVolodyaIDE"
+rootProject.name = "DevStudio"
 include(":app")
