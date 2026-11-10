@@ -278,23 +278,40 @@ private fun DevVolodyaApp(repository: WorkspaceRepository) {
                     onOpen = { openProject(it) }
                 )
                 Page.EDITOR -> EditorPage(
-                    project = selectedProject,
-                    files = projectFiles,
-                    selectedFile = selectedFile,
-                    content = editorContent,
-                    dirty = editorDirty,
-                    onSelectFile = { openFile(it) },
-                    onContentChange = {
-                        editorContent = it
-                        editorDirty = true
-                    },
-                    onSave = { saveCurrentFile() },
-                    onCreateFile = { showCreateFileDialog = true },
-                    onOpenProjects = { page = Page.PROJECTS }
+                    project = selectedProject, files = projectFiles, selectedFile = selectedFile,
+                    content = editorContent, dirty = editorDirty,
+                    onSelectFile = { openFile(it) }, onContentChange = { editorContent = it; editorDirty = true },
+                    onSave = { saveCurrentFile() }, onCreateFile = { showCreateFileDialog = true },
+                    onOpenProjects = { page = Page.PROJECTS },
+                    onCopyFile = { selectedFile?.let { fileClipboard = it; cutClipboard = false; statusMessage = "File copied" } },
+                    onCutFile = { selectedFile?.let { fileClipboard = it; cutClipboard = true; statusMessage = "File ready to move" } },
+                    onPasteFile = { val src = fileClipboard; if (src != null) runCatching {
+                        val suffix = if (src.extension.isBlank()) "" else ".${src.extension}"
+                        val dst = File(src.parentFile, src.nameWithoutExtension + "_copy" + suffix)
+                        src.copyTo(dst, overwrite = false); if (cutClipboard) src.delete()
+                        fileClipboard = null; cutClipboard = false; refreshProjectFiles(); openFile(dst); statusMessage = "File pasted"
+                    }.onFailure { statusMessage = it.message ?: "Paste failed" } },
+                    onDeleteFile = { showDeleteDialog = true },
+                    onCopyCode = { val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager; cm.setPrimaryClip(ClipData.newPlainText("code", editorContent)); statusMessage = "Code copied" },
+                    onCutCode = { val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager; cm.setPrimaryClip(ClipData.newPlainText("code", editorContent)); editorContent = ""; editorDirty = true; statusMessage = "Code cut — save to apply" },
+                    onPasteCode = { val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager; val clip = cm.primaryClip?.getItemAt(0)?.coerceToText(this@MainActivity)?.toString().orEmpty(); if (clip.isNotEmpty()) { editorContent += clip; editorDirty = true; statusMessage = "Code pasted" } }
                 )
                 Page.GIT -> GitPage(selectedProject)
-                Page.BUILD -> BuildPage()
-                Page.SETTINGS -> SettingsPage()
+                Page.BUILD -> BuildPage(selectedProject,
+                    onExportZip = { exportZip(selectedProject, filesDir)?.let { statusMessage = "ZIP exported: ${it.absolutePath}" } ?: run { statusMessage = "ZIP export failed" } },
+                    onExportShell = { exportShell(selectedProject)?.let { statusMessage = "SH created: ${it.absolutePath}" } ?: run { statusMessage = "SH export failed" } },
+                    onBuildApk = { statusMessage = "APK build requires an Android SDK/Gradle build runner. No build was started on this device." })
+                Page.SETTINGS -> SettingsPage(rootStatus) {
+                    Thread {
+                        val result = runCatching {
+                            val process = ProcessBuilder("su", "-c", "id").redirectErrorStream(true).start()
+                            val output = process.inputStream.bufferedReader().readText()
+                            val code = process.waitFor()
+                            if (code == 0 && output.contains("uid=0")) "Root granted: $output" else "Root unavailable or denied: $output"
+                        }.getOrElse { "Root unavailable: ${it.message}" }
+                        runOnUiThread { rootStatus = result }
+                    }.start()
+                }
             }
         }
     }
@@ -392,7 +409,9 @@ private fun EditorPage(
     onContentChange: (String) -> Unit,
     onSave: () -> Unit,
     onCreateFile: () -> Unit,
-    onOpenProjects: () -> Unit
+    onOpenProjects: () -> Unit,
+    onCopyFile: () -> Unit, onCutFile: () -> Unit, onPasteFile: () -> Unit, onDeleteFile: () -> Unit,
+    onCopyCode: () -> Unit, onCutCode: () -> Unit, onPasteCode: () -> Unit
 ) {
     if (project == null) {
         Text("Open a project from Projects to start editing.", color = Muted)
@@ -459,6 +478,17 @@ private fun EditorPage(
                     Icon(Icons.Default.Save, contentDescription = "Save file")
                 }
             }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                TextButton(onClick = onCopyFile, enabled = selectedFile != null) { Text("Copy file") }
+                TextButton(onClick = onCutFile, enabled = selectedFile != null) { Text("Cut") }
+                TextButton(onClick = onPasteFile, enabled = selectedFile != null) { Text("Paste") }
+                TextButton(onClick = onDeleteFile, enabled = selectedFile != null) { Text("Delete") }
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                TextButton(onClick = onCopyCode) { Text("Copy code") }
+                TextButton(onClick = onCutCode) { Text("Cut code") }
+                TextButton(onClick = onPasteCode) { Text("Paste code") }
+            }
             OutlinedTextField(
                 value = content,
                 onValueChange = onContentChange,
@@ -500,21 +530,25 @@ private fun GitPage(project: File?) {
 @Composable
 private fun BuildPage(project: File?, onExportZip: () -> Unit, onExportShell: () -> Unit, onBuildApk: () -> Unit) {
     Text("Build Center", style = MaterialTheme.typography.titleMedium)
-    Spacer(Modifier.height(12.dp))
+    Spacer(Modifier.height(10.dp))
+    if (project == null) Text("Open a project first.", color = Muted) else {
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            Button(onClick = onBuildApk) { Text("Build APK") }
+            OutlinedButton(onClick = onExportZip) { Text("Export ZIP") }
+            OutlinedButton(onClick = onExportShell) { Text("Export SH") }
+        }
+    }
+    Spacer(Modifier.height(10.dp))
     listOf(
-        "Android APK" to "Gradle + Android SDK; not bundled in this app",
-        "C / C++" to "Android NDK / Clang toolchain required",
-        "Java / Kotlin" to "JDK + Gradle / D8 integration required",
-        "Python / JavaScript" to "Runtime integration required",
-        "ZIP / SH" to "Local exporters planned",
-        "Windows EXE" to "Cross-compilation toolchain required; no native Windows execution"
+        "Android APK / AAB" to "Requires Android SDK, Gradle and Android build runner.",
+        "C / C++" to "Requires Clang / NDK toolchain.",
+        "Java / Kotlin" to "Requires JDK, Gradle and D8/R8.",
+        "Python / JavaScript" to "Requires a runtime or packaging tool for the selected target.",
+        "ZIP" to "Local project archive export is available.",
+        "SH" to "A shell helper script can be exported.",
+        "Windows EXE" to "Requires a Windows-compatible compiler or remote Windows runner."
     ).forEach { InfoRow(it.first, it.second) }
-    Spacer(Modifier.height(12.dp))
-    Text(
-        "The app does not claim to build a target until a real toolchain is installed and its output is verified.",
-        color = Muted,
-        fontSize = 12.sp
-    )
+    Text("A target is marked built only after a real compiler produces and verifies the output.", color = Muted, fontSize = 12.sp)
 }
 
 @Composable
@@ -523,10 +557,19 @@ private fun SettingsPage(rootStatus: String, onCheckRoot: () -> Unit) {
     Spacer(Modifier.height(8.dp))
     InfoRow("Package", "com.devvolodya.ide")
     InfoRow("Platform", "Native Android · Kotlin · Jetpack Compose")
-    InfoRow("Workspace", "App-private storage; SAF import is a later milestone")
-    InfoRow("Native ABI", "ARM64 (arm64-v8a) for future native toolchains")
-    InfoRow("Dev Hub", "Local + remote server planned")
-    InfoRow("Root status", rootStatus)\n    OutlinedButton(onClick = onCheckRoot) { Text("Check KernelSU / Magisk root") }\n    Spacer(Modifier.height(12.dp))\n    Text("COMPLETE USER GUIDE", color = Accent, style = MaterialTheme.typography.titleMedium)\n    InfoRow("1. Projects", "Open Projects, enter a project name and tap Create. Open a project to see its files.")\n    InfoRow("2. Files", "Use + / New file to create a file. Select a file in the left list. Copy file, Cut, Paste file and Delete act on the selected file. Delete asks for confirmation.")\n    InfoRow("3. Code editor", "Edit text in the editor. Save commits changes to the local workspace. Copy code, Cut code and Paste code work with the whole editor buffer and Android clipboard.")\n    InfoRow("4. Build Center", "Choose Build APK when an Android SDK build runner is configured. ZIP and SH export are available for project packaging. Other targets need their own compiler/toolchain.")\n    InfoRow("5. Git", "Git controls are planned; repository status and commits are not active in this build.")\n    InfoRow("6. Root", "Device must already be rooted. Tap Check KernelSU / Magisk root and approve the superuser prompt. Root is not enabled automatically and no command runs silently.")\n    InfoRow("7. Backups", "Export ZIP before making major changes. App data may be removed if DevVolodya IDE is uninstalled.")\n    InfoRow("8. Supported targets", "APK/AAB: Android Gradle + SDK. EXE: Windows toolchain. ZIP: archive exporter. SH: shell script. Python/JS/JVM/native targets require matching runtimes and compilers.")
+    InfoRow("Workspace", "Projects are stored in app-private storage.")
+    InfoRow("Root status", rootStatus)
+    OutlinedButton(onClick = onCheckRoot) { Text("Check KernelSU / Magisk root") }
+    Spacer(Modifier.height(12.dp))
+    Text("COMPLETE USER GUIDE", color = Accent, style = MaterialTheme.typography.titleMedium)
+    InfoRow("1. Projects", "Open Projects, enter a name and tap Create. Open a project to browse its files.")
+    InfoRow("2. Files", "Use New file to create a file. Select it from the file list. Copy file, Cut, Paste and Delete act on the selected file. Delete asks for confirmation.")
+    InfoRow("3. Code editor", "Edit code and tap Save. Copy code, Cut code and Paste code use Android clipboard and operate on the whole editor buffer.")
+    InfoRow("4. Build Center", "ZIP and SH export are available. APK requires an Android SDK/Gradle build runner. Other targets need their own compiler or remote build environment.")
+    InfoRow("5. Git", "Git operations are not connected in this build yet.")
+    InfoRow("6. Root", "The phone must already be rooted. Tap the root check and approve the KernelSU/Magisk prompt. Root is never silently granted.")
+    InfoRow("7. Backups", "Export ZIP before major edits. Uninstalling the app may remove its private workspace.")
+    InfoRow("8. Formats", "APK/AAB use Android Gradle; EXE uses a Windows toolchain; ZIP is an archive; SH is a shell script. Python, JavaScript, JVM and native targets need matching runtimes and compilers.")
 }
 
 @Composable
@@ -542,4 +585,30 @@ private fun InfoRow(title: String, detail: String) {
         }
     }
 }
-\n\nprivate fun exportZip(project: File?, filesDir: File): File? {\n    if (project == null || !project.isDirectory) return null\n    return runCatching { val outDir = File(filesDir, "exports").apply { mkdirs() }; val out = File(outDir, "${project.name}.zip"); ZipOutputStream(FileOutputStream(out)).use { zip -> project.walkTopDown().filter { it.isFile }.forEach { file -> val entry = ZipEntry(project.name + "/" + file.relativeTo(project).invariantSeparatorsPath); zip.putNextEntry(entry); file.inputStream().use { it.copyTo(zip) }; zip.closeEntry() } }; out }.getOrNull()\n}\n\nprivate fun exportShell(project: File?): File? {\n    if (project == null || !project.isDirectory) return null\n    return runCatching { val out = File(project, "build-project.sh"); out.writeText("#!/system/bin/sh\\nset -eu\\nROOT=\\\"\\$(CDPATH= cd -- \\\"\\$(dirname -- \\\"\\$0\\\")\\\" && pwd)\\\"\\necho \\\"Project: ${project.name}\\\"\\necho \\\"This is an export helper. Add the required compiler/build commands for your project.\\\"\\n", Charsets.UTF_8); out.setExecutable(true); out }.getOrNull()\n}\n
+
+
+private fun exportZip(project: File?, filesDir: File): File? {
+    if (project == null || !project.isDirectory) return null
+    return runCatching {
+        val outDir = File(filesDir, "exports").apply { mkdirs() }
+        val out = File(outDir, "${project.name}.zip")
+        ZipOutputStream(FileOutputStream(out)).use { zip ->
+            project.walkTopDown().filter { it.isFile }.forEach { file ->
+                zip.putNextEntry(ZipEntry(project.name + "/" + file.relativeTo(project).invariantSeparatorsPath))
+                file.inputStream().use { it.copyTo(zip) }
+                zip.closeEntry()
+            }
+        }
+        out
+    }.getOrNull()
+}
+
+private fun exportShell(project: File?): File? {
+    if (project == null || !project.isDirectory) return null
+    return runCatching {
+        val out = File(project, "build-project.sh")
+        out.writeText("#!/system/bin/sh\nset -eu\necho \"Project: ${project.name}\"\necho \"Add the required compiler command for this project.\"\n", Charsets.UTF_8)
+        out.setExecutable(true)
+        out
+    }.getOrNull()
+}
