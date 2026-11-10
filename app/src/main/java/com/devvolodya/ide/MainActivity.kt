@@ -79,7 +79,8 @@ private enum class Page(val label: String) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun DevVolodyaApp(repository: WorkspaceRepository) {\n    val context = LocalContext.current\n    val activity = context as? Activity
+private fun DevVolodyaApp(repository: WorkspaceRepository) {
+    val context = LocalContext.current
     var page by remember { mutableStateOf(Page.HOME) }
     var projects by remember { mutableStateOf(repository.listProjects()) }
     var selectedProject by remember { mutableStateOf<File?>(null) }
