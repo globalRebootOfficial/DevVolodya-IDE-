@@ -293,9 +293,9 @@ private fun DevVolodyaApp(repository: WorkspaceRepository) {\n    val context = 
                         fileClipboard = null; cutClipboard = false; refreshProjectFiles(); openFile(dst); statusMessage = "File pasted"
                     }.onFailure { statusMessage = it.message ?: "Paste failed" } },
                     onDeleteFile = { showDeleteDialog = true },
-                    onCopyCode = { val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager; cm.setPrimaryClip(ClipData.newPlainText("code", editorContent)); statusMessage = "Code copied" },
-                    onCutCode = { val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager; cm.setPrimaryClip(ClipData.newPlainText("code", editorContent)); editorContent = ""; editorDirty = true; statusMessage = "Code cut — save to apply" },
-                    onPasteCode = { val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager; val clip = cm.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString().orEmpty(); if (clip.isNotEmpty()) { editorContent += clip; editorDirty = true; statusMessage = "Code pasted" } }
+                    onCopyCode = { val cm = context.context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager; cm.setPrimaryClip(ClipData.newPlainText("code", editorContent)); statusMessage = "Code copied" },
+                    onCutCode = { val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager; cm.setPrimaryClip(ClipData.newPlainText("code", editorContent)); editorContent = ""; editorDirty = true; statusMessage = "Code cut — save to apply" },
+                    onPasteCode = { val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager; val clip = cm.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString().orEmpty(); if (clip.isNotEmpty()) { editorContent += clip; editorDirty = true; statusMessage = "Code pasted" } }
                 )
                 Page.GIT -> GitPage(selectedProject)
                 Page.BUILD -> BuildPage(selectedProject,
@@ -310,7 +310,7 @@ private fun DevVolodyaApp(repository: WorkspaceRepository) {\n    val context = 
                             val code = process.waitFor()
                             if (code == 0 && output.contains("uid=0")) "Root granted: $output" else "Root unavailable or denied: $output"
                         }.getOrElse { "Root unavailable: ${it.message}" }
-                        activity?.runOnUiThread { rootStatus = result }
+                        android.os.Handler(android.os.Looper.getMainLooper()).post { rootStatus = result }
                     }.start()
                 }
             }
