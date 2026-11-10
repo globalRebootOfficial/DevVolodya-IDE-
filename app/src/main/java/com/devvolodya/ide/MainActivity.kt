@@ -1,6 +1,7 @@
 package com.devvolodya.ide
 
 import android.os.Bundle
+import android.app.Activity
 import android.content.Context
 import android.content.ClipboardManager
 import android.content.ClipData
@@ -78,7 +79,7 @@ private enum class Page(val label: String) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun DevVolodyaApp(repository: WorkspaceRepository) {
+private fun DevVolodyaApp(repository: WorkspaceRepository) {\n    val context = LocalContext.current\n    val activity = context as? Activity
     var page by remember { mutableStateOf(Page.HOME) }
     var projects by remember { mutableStateOf(repository.listProjects()) }
     var selectedProject by remember { mutableStateOf<File?>(null) }
@@ -292,13 +293,13 @@ private fun DevVolodyaApp(repository: WorkspaceRepository) {
                         fileClipboard = null; cutClipboard = false; refreshProjectFiles(); openFile(dst); statusMessage = "File pasted"
                     }.onFailure { statusMessage = it.message ?: "Paste failed" } },
                     onDeleteFile = { showDeleteDialog = true },
-                    onCopyCode = { val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager; cm.setPrimaryClip(ClipData.newPlainText("code", editorContent)); statusMessage = "Code copied" },
+                    onCopyCode = { val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager; cm.setPrimaryClip(ClipData.newPlainText("code", editorContent)); statusMessage = "Code copied" },
                     onCutCode = { val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager; cm.setPrimaryClip(ClipData.newPlainText("code", editorContent)); editorContent = ""; editorDirty = true; statusMessage = "Code cut — save to apply" },
-                    onPasteCode = { val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager; val clip = cm.primaryClip?.getItemAt(0)?.coerceToText(this@MainActivity)?.toString().orEmpty(); if (clip.isNotEmpty()) { editorContent += clip; editorDirty = true; statusMessage = "Code pasted" } }
+                    onPasteCode = { val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager; val clip = cm.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString().orEmpty(); if (clip.isNotEmpty()) { editorContent += clip; editorDirty = true; statusMessage = "Code pasted" } }
                 )
                 Page.GIT -> GitPage(selectedProject)
                 Page.BUILD -> BuildPage(selectedProject,
-                    onExportZip = { exportZip(selectedProject, filesDir)?.let { statusMessage = "ZIP exported: ${it.absolutePath}" } ?: run { statusMessage = "ZIP export failed" } },
+                    onExportZip = { exportZip(selectedProject, context.filesDir)?.let { statusMessage = "ZIP exported: ${it.absolutePath}" } ?: run { statusMessage = "ZIP export failed" } },
                     onExportShell = { exportShell(selectedProject)?.let { statusMessage = "SH created: ${it.absolutePath}" } ?: run { statusMessage = "SH export failed" } },
                     onBuildApk = { statusMessage = "APK build requires an Android SDK/Gradle build runner. No build was started on this device." })
                 Page.SETTINGS -> SettingsPage(rootStatus) {
@@ -309,7 +310,7 @@ private fun DevVolodyaApp(repository: WorkspaceRepository) {
                             val code = process.waitFor()
                             if (code == 0 && output.contains("uid=0")) "Root granted: $output" else "Root unavailable or denied: $output"
                         }.getOrElse { "Root unavailable: ${it.message}" }
-                        runOnUiThread { rootStatus = result }
+                        activity?.runOnUiThread { rootStatus = result }
                     }.start()
                 }
             }
