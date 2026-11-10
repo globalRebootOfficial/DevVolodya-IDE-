@@ -293,7 +293,7 @@ private fun DevVolodyaApp(repository: WorkspaceRepository) {\n    val context = 
                         fileClipboard = null; cutClipboard = false; refreshProjectFiles(); openFile(dst); statusMessage = "File pasted"
                     }.onFailure { statusMessage = it.message ?: "Paste failed" } },
                     onDeleteFile = { showDeleteDialog = true },
-                    onCopyCode = { val cm = context.context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager; cm.setPrimaryClip(ClipData.newPlainText("code", editorContent)); statusMessage = "Code copied" },
+                    onCopyCode = { val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager; cm.setPrimaryClip(ClipData.newPlainText("code", editorContent)); statusMessage = "Code copied" },
                     onCutCode = { val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager; cm.setPrimaryClip(ClipData.newPlainText("code", editorContent)); editorContent = ""; editorDirty = true; statusMessage = "Code cut — save to apply" },
                     onPasteCode = { val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager; val clip = cm.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString().orEmpty(); if (clip.isNotEmpty()) { editorContent += clip; editorDirty = true; statusMessage = "Code pasted" } }
                 )
