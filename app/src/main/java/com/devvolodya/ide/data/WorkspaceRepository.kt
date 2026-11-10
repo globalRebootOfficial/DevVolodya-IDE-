@@ -2,6 +2,12 @@ package com.devvolodya.ide.data
 
 import java.io.File
 import java.io.IOException
+import java.nio.file.FileVisitResult
+import java.nio.file.Files
+import java.nio.file.LinkOption
+import java.nio.file.Path
+import java.nio.file.SimpleFileVisitor
+import java.nio.file.attribute.BasicFileAttributes
 
 /**
  * Safe access to the app-private project workspace.
@@ -47,37 +53,22 @@ class WorkspaceRepository(private val workspaceRoot: File) {
 
     fun listProjectFiles(project: File): List<File> {
         validateProject(project)
-        return project.walkTopDown()
-            .onEnter { directory -> directory == project || !directory.name.startsWith(".") }
+        val canonicalProject = project.canonicalFile
+        return canonicalProject.walkTopDown()
+            .onEnter { directory -> directory == canonicalProject || !directory.name.startsWith(".") }
             .filter { file ->
                 file.isFile &&
                     !file.name.startsWith(".") &&
-                    isInside(project, file)
+                    isInside(canonicalProject, file)
             }
-            .sortedBy { it.relativeTo(project).invariantSeparatorsPath.lowercase() }
+            .sortedBy { it.relativeTo(canonicalProject).invariantSeparatorsPath.lowercase() }
             .toList()
     }
 
-    /**
-     * Creates a file below the selected project. Nested paths such as
-     * "src/Main.kt" are supported; absolute paths and traversal are rejected.
-     */
+    /** Creates a UTF-8 file below the selected project. Nested paths are supported. */
     fun createFile(project: File, relativePath: String): File {
-        validateProject(project)
-        require(relativePath.isNotBlank()) { "File path cannot be empty" }
-        require(!relativePath.startsWith("/") && !relativePath.contains('\\')) {
-            "Use a relative path with forward slashes"
-        }
-
-        val segments = relativePath.split("/")
-        require(segments.all { it.isNotBlank() && it != "." && it != ".." }) {
-            "Path traversal and empty path segments are not allowed"
-        }
-        segments.forEach { validateSegment(it, "path segment") }
-
-        val target = File(project, relativePath).canonicalFile
-        require(isInside(project, target)) { "File must stay inside the selected project" }
-        if (target.exists()) {
+        val target = resolveRelativePath(project, relativePath)
+        if (Files.exists(target.toPath(), LinkOption.NOFOLLOW_LINKS)) {
             throw IOException("File already exists")
         }
 
@@ -91,25 +82,107 @@ class WorkspaceRepository(private val workspaceRoot: File) {
         return target
     }
 
+    /** Creates a directory below the selected project, including missing parent folders. */
+    fun createDirectory(project: File, relativePath: String): File {
+        val target = resolveRelativePath(project, relativePath)
+        if (Files.exists(target.toPath(), LinkOption.NOFOLLOW_LINKS)) {
+            throw IOException("Directory already exists")
+        }
+
+        val parent = target.parentFile ?: throw IOException("Invalid directory path")
+        if (!parent.exists() && !parent.mkdirs()) {
+            throw IOException("Cannot create parent directory")
+        }
+        if (!target.mkdir()) {
+            throw IOException("Cannot create directory")
+        }
+        return target
+    }
+
+    /** Renames a file or directory without allowing it to leave the project. */
+    fun renameEntry(project: File, entry: File, rawNewName: String): File {
+        validateProject(project)
+        val source = resolveExistingEntry(project, entry)
+        val newName = validateSegment(rawNewName, "new name")
+        if (source.name == newName) return source
+
+        val parent = source.parentFile ?: throw IOException("Cannot rename project root")
+        val target = File(parent, newName).canonicalFile
+        require(isInside(project, target)) { "Renamed entry must stay inside the project" }
+        if (Files.exists(target.toPath(), LinkOption.NOFOLLOW_LINKS)) {
+            throw IOException("An entry with that name already exists")
+        }
+
+        Files.move(source.toPath(), target.toPath())
+        return target
+    }
+
+    /** Deletes a file or directory tree without following symbolic links. */
+    fun deleteEntry(project: File, entry: File) {
+        validateProject(project)
+        val target = resolveExistingEntry(project, entry)
+
+        Files.walkFileTree(target.toPath(), object : SimpleFileVisitor<Path>() {
+            override fun visitFile(file: Path, attrs: BasicFileAttributes): FileVisitResult {
+                Files.delete(file)
+                return FileVisitResult.CONTINUE
+            }
+
+            override fun postVisitDirectory(dir: Path, error: IOException?): FileVisitResult {
+                if (error != null) throw error
+                Files.delete(dir)
+                return FileVisitResult.CONTINUE
+            }
+        })
+    }
+
     fun readText(file: File): String {
-        require(isInside(workspaceRoot, file)) { "File is outside the workspace" }
-        if (!file.isFile) throw IOException("Selected path is not a file")
-        if (file.length() > MAX_EDITABLE_BYTES) {
+        val canonicalFile = file.canonicalFile
+        require(isInside(workspaceRoot, canonicalFile)) { "File is outside the workspace" }
+        if (!canonicalFile.isFile) throw IOException("Selected path is not a file")
+        if (canonicalFile.length() > MAX_EDITABLE_BYTES) {
             throw IOException("File is larger than the 1 MiB editor limit")
         }
-        return file.readText(Charsets.UTF_8)
+        return canonicalFile.readText(Charsets.UTF_8)
     }
 
     fun writeText(file: File, content: String) {
-        require(isInside(workspaceRoot, file)) { "File is outside the workspace" }
-        if (!file.isFile) throw IOException("Selected path is not a file")
+        val canonicalFile = file.canonicalFile
+        require(isInside(workspaceRoot, canonicalFile)) { "File is outside the workspace" }
+        if (!canonicalFile.isFile) throw IOException("Selected path is not a file")
         if (content.toByteArray(Charsets.UTF_8).size > MAX_EDITABLE_BYTES) {
             throw IOException("File is larger than the 1 MiB editor limit")
         }
-        file.writeText(content, Charsets.UTF_8)
+        canonicalFile.writeText(content, Charsets.UTF_8)
+    }
+
+    private fun resolveRelativePath(project: File, relativePath: String): File {
+        validateProject(project)
+        require(relativePath.isNotBlank()) { "Path cannot be empty" }
+        require(!relativePath.startsWith("/") && '\\' !in relativePath) {
+            "Use a relative path with forward slashes"
+        }
+
+        val segments = relativePath.split("/")
+        require(segments.all { it.isNotBlank() }) { "Path contains an empty segment" }
+        val safeSegments = segments.map { validateSegment(it, "path segment") }
+        val canonicalProject = project.canonicalFile
+        val target = File(canonicalProject, safeSegments.joinToString(File.separator)).canonicalFile
+        require(isInside(canonicalProject, target)) { "Path must stay inside the selected project" }
+        return target
+    }
+
+    private fun resolveExistingEntry(project: File, entry: File): File {
+        require(!Files.isSymbolicLink(entry.toPath())) { "Symbolic links cannot be modified" }
+        val canonicalProject = project.canonicalFile
+        val target = entry.canonicalFile
+        require(isInside(canonicalProject, target)) { "Entry is outside the selected project" }
+        if (!target.exists()) throw IOException("Selected entry does not exist")
+        return target
     }
 
     private fun validateProject(project: File) {
+        require(!Files.isSymbolicLink(project.toPath())) { "Symbolic-link projects are not supported" }
         val canonicalProject = project.canonicalFile
         require(isInside(workspaceRoot, canonicalProject)) { "Project is outside the workspace" }
         require(canonicalProject.parentFile == workspaceRoot.canonicalFile) {
